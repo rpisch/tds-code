@@ -1,0 +1,16 @@
+# macOS and Xcode
+.DS_Store
+DerivedData/
+*.xcuserstate
+xcuserdata/
+
+# Swift Package Manager
+.build/
+
+# Arduino and local editor files
+*.hex
+*.bin
+*.elf
+*.map
+.vscode/
+.idea/
