@@ -8,6 +8,7 @@ final class BLECounterManager: NSObject, ObservableObject {
     @Published var isConnected = false
     @Published var connectionStateText = "Not started"
     @Published var debugMessage = "Open the ESP32 Serial Monitor for matching connection logs."
+    @Published var discoveredDevices: [String] = []
 
     private let deviceName = "ESP32-TDS-BLE"
     private let serviceUUID = CBUUID(string: "7B6A0001-9F7A-4D2B-9A5B-0B1F2A4C1000")
@@ -15,6 +16,7 @@ final class BLECounterManager: NSObject, ObservableObject {
 
     private var centralManager: CBCentralManager!
     private var esp32Peripheral: CBPeripheral?
+    private var scanTimeoutTimer: Timer?
 
     var latestValueText: String {
         if let latestValue {
@@ -26,34 +28,69 @@ final class BLECounterManager: NSObject, ObservableObject {
 
     override init() {
         super.init()
-        centralManager = CBCentralManager(delegate: self, queue: nil)
+        centralManager = CBCentralManager(delegate: self, queue: .main)
     }
 
     func startScanning() {
+        guard !isConnected else {
+            debugMessage = "Already connected to ESP32."
+            return
+        }
+
         guard centralManager.state == .poweredOn else {
             connectionStateText = "Bluetooth unavailable"
             debugMessage = "Bluetooth state: \(centralManager.state.debugDescription)"
             return
         }
 
+        centralManager.stopScan()
+        scanTimeoutTimer?.invalidate()
+
         latestValue = nil
         isScanning = true
         isConnected = false
         connectionStateText = "Scanning"
-        debugMessage = "Looking for \(deviceName)..."
+        debugMessage = "Scanning for BLE devices. Waiting for \(deviceName)..."
+        discoveredDevices = []
 
+        // Scan broadly while debugging. Some ESP32 setups advertise the name before
+        // iOS sees the custom service UUID, especially during early bring-up.
         centralManager.scanForPeripherals(
-            withServices: [serviceUUID],
+            withServices: nil,
             options: [CBCentralManagerScanOptionAllowDuplicatesKey: false]
         )
+
+        scanTimeoutTimer = Timer.scheduledTimer(withTimeInterval: 15, repeats: false) { [weak self] _ in
+            self?.handleScanTimeout()
+        }
     }
 
     func disconnect() {
         guard let esp32Peripheral else {
+            stopScanning()
+            connectionStateText = "Disconnected"
+            debugMessage = "No ESP32 connection is active."
             return
         }
 
         centralManager.cancelPeripheralConnection(esp32Peripheral)
+    }
+
+    private func stopScanning() {
+        centralManager.stopScan()
+        scanTimeoutTimer?.invalidate()
+        scanTimeoutTimer = nil
+        isScanning = false
+    }
+
+    private func handleScanTimeout() {
+        guard isScanning else {
+            return
+        }
+
+        stopScanning()
+        connectionStateText = "Not found"
+        debugMessage = "Scan timed out after 15 seconds. Found \(discoveredDevices.count) BLE device(s), but not \(deviceName)."
     }
 }
 
@@ -65,32 +102,32 @@ extension BLECounterManager: CBCentralManagerDelegate {
             debugMessage = "Ready to scan for ESP32."
             startScanning()
         case .poweredOff:
-            isScanning = false
+            stopScanning()
             isConnected = false
             connectionStateText = "Bluetooth off"
             debugMessage = "Turn on Bluetooth on this iPhone."
         case .unauthorized:
-            isScanning = false
+            stopScanning()
             isConnected = false
             connectionStateText = "Bluetooth unauthorized"
             debugMessage = "Allow Bluetooth access for this app in Settings."
         case .unsupported:
-            isScanning = false
+            stopScanning()
             isConnected = false
             connectionStateText = "Bluetooth unsupported"
             debugMessage = "This device does not support Bluetooth LE central mode."
         case .resetting:
-            isScanning = false
+            stopScanning()
             isConnected = false
             connectionStateText = "Bluetooth resetting"
             debugMessage = "Bluetooth is resetting. Try again in a moment."
         case .unknown:
-            isScanning = false
+            stopScanning()
             isConnected = false
             connectionStateText = "Bluetooth unknown"
             debugMessage = "Waiting for Bluetooth state..."
         @unknown default:
-            isScanning = false
+            stopScanning()
             isConnected = false
             connectionStateText = "Bluetooth error"
             debugMessage = "Unknown Bluetooth state: \(central.state.rawValue)"
@@ -106,14 +143,24 @@ extension BLECounterManager: CBCentralManagerDelegate {
         let advertisedName = advertisementData[CBAdvertisementDataLocalNameKey] as? String
         let peripheralName = peripheral.name
         let foundName = advertisedName ?? peripheralName ?? "unnamed peripheral"
+        let advertisedServices = advertisementData[CBAdvertisementDataServiceUUIDsKey] as? [CBUUID] ?? []
+        let overflowServices = advertisementData[CBAdvertisementDataOverflowServiceUUIDsKey] as? [CBUUID] ?? []
+        let serviceMatches = advertisedServices.contains(serviceUUID) || overflowServices.contains(serviceUUID)
+        let nameMatches = advertisedName == deviceName || peripheralName == deviceName
 
-        isScanning = false
+        rememberDiscoveredDevice(name: foundName, rssi: RSSI, serviceMatches: serviceMatches)
+
+        guard nameMatches || serviceMatches else {
+            debugMessage = "Scanning... saw \(discoveredDevices.count) BLE device(s). Waiting for \(deviceName)."
+            return
+        }
+
+        stopScanning()
         connectionStateText = "Connecting"
         debugMessage = "Found \(foundName), RSSI \(RSSI)."
 
         esp32Peripheral = peripheral
         esp32Peripheral?.delegate = self
-        centralManager.stopScan()
         centralManager.connect(peripheral)
     }
 
@@ -129,7 +176,7 @@ extension BLECounterManager: CBCentralManagerDelegate {
         didFailToConnect peripheral: CBPeripheral,
         error: Error?
     ) {
-        isScanning = false
+        stopScanning()
         isConnected = false
         connectionStateText = "Disconnected"
         debugMessage = "Failed to connect: \(error?.localizedDescription ?? "No error details")."
@@ -140,11 +187,26 @@ extension BLECounterManager: CBCentralManagerDelegate {
         didDisconnectPeripheral peripheral: CBPeripheral,
         error: Error?
     ) {
-        isScanning = false
+        stopScanning()
         isConnected = false
         esp32Peripheral = nil
         connectionStateText = "Disconnected"
         debugMessage = error?.localizedDescription ?? "Disconnected from ESP32."
+    }
+
+    private func rememberDiscoveredDevice(name: String, rssi: NSNumber, serviceMatches: Bool) {
+        let marker = serviceMatches ? "service match" : "BLE"
+        let summary = "\(name) | RSSI \(rssi) | \(marker)"
+
+        discoveredDevices.removeAll { existing in
+            existing.hasPrefix("\(name) |")
+        }
+
+        discoveredDevices.insert(summary, at: 0)
+
+        if discoveredDevices.count > 8 {
+            discoveredDevices.removeLast(discoveredDevices.count - 8)
+        }
     }
 }
 

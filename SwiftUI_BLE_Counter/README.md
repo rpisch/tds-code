@@ -15,8 +15,16 @@ This folder contains the SwiftUI side of the ESP32 BLE counter test.
 2. Choose SwiftUI for the interface and Swift for the language.
 3. Replace the generated app entry file with `BLECounterApp.swift`, or keep the generated `@main` file and do not add `BLECounterApp.swift`.
 4. Add `ContentView.swift` and `BLECounterManager.swift` to the app target.
-5. Add the Bluetooth usage descriptions from `Info.plist` to your app target's Info settings.
+5. Add the Bluetooth usage descriptions from `Info.plist` to your app target's actual Info settings. In newer Xcode projects, the generated target Info settings may be used instead of this standalone file.
 6. Run on a real iPhone. The iOS Simulator cannot test Bluetooth LE connections to an ESP32.
+
+## Phone Debug Checklist
+
+- If the button changes to `Scanning...`, the button is working and CoreBluetooth is scanning.
+- If it says `Bluetooth unauthorized`, open iPhone Settings for the app and allow Bluetooth.
+- If nearby BLE devices appear but not `ESP32-TDS-BLE`, the iPhone is scanning but the ESP32 is not advertising in a way the app can see.
+- If no nearby BLE devices appear after 15 seconds, test with nRF Connect or LightBlue to confirm the phone can see BLE advertisements.
+- The ESP32 should print `ESP32 BLE counter started.` and then `Updated value...` or `Notified value...` in Arduino Serial Monitor at `115200` baud.
 
 ## BLE Contract
 
