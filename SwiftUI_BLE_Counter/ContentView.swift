@@ -20,7 +20,7 @@ struct ContentView: View {
 
     private var header: some View {
         VStack(spacing: 8) {
-            Text("Debug UI v4")
+            Text("Debug UI v5")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.orange)
 
@@ -52,6 +52,11 @@ struct ContentView: View {
             }
             .buttonStyle(.bordered)
             .disabled(!bleManager.isConnected && !bleManager.isScanning)
+
+            Button("Reset Bluetooth Manager") {
+                bleManager.recreateBluetoothManagerTapped()
+            }
+            .buttonStyle(.bordered)
         }
     }
 
@@ -69,6 +74,11 @@ struct ContentView: View {
                     .frame(maxWidth: .infinity)
 
                 Text("Scan button taps: \(bleManager.scanButtonTapCount)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity)
+
+                Text("Managers created: \(bleManager.centralManagerCreateCount) | State callbacks: \(bleManager.stateUpdateCallbackCount)")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity)

@@ -3,7 +3,7 @@ import CoreBluetooth
 import Foundation
 
 final class BLECounterManager: NSObject, ObservableObject {
-    @Published var managerVersionText = "BLE manager v4 loaded"
+    @Published var managerVersionText = "BLE manager v5 loaded"
     @Published var latestValue: UInt8?
     @Published var isScanning = false
     @Published var isConnected = false
@@ -12,16 +12,20 @@ final class BLECounterManager: NSObject, ObservableObject {
     @Published var debugMessage = "Open the ESP32 Serial Monitor for matching connection logs."
     @Published var discoveredDevices: [String] = []
     @Published var scanButtonTapCount = 0
+    @Published var centralManagerCreateCount = 0
+    @Published var stateUpdateCallbackCount = 0
 
     private let deviceName = "ESP32-TDS-BLE"
     private let serviceUUID = CBUUID(string: "7B6A0001-9F7A-4D2B-9A5B-0B1F2A4C1000")
     private let counterCharacteristicUUID = CBUUID(string: "7B6A0002-9F7A-4D2B-9A5B-0B1F2A4C1000")
 
-    private var centralManager: CBCentralManager!
+    private var centralManager: CBCentralManager?
     private var esp32Peripheral: CBPeripheral?
     private var scanTimeoutTimer: Timer?
+    private var bluetoothStateWatchdogTimer: Timer?
     private var pendingScanAfterBluetoothPowersOn = false
     private var discoveredDeviceSummariesByID: [UUID: String] = [:]
+    private var hasRecreatedUnknownCentralManager = false
 
     var latestValueText: String {
         if let latestValue {
@@ -33,22 +37,28 @@ final class BLECounterManager: NSObject, ObservableObject {
 
     override init() {
         super.init()
-        centralManager = CBCentralManager(
-            delegate: self,
-            queue: .main,
-            options: [CBCentralManagerOptionShowPowerAlertKey: true]
-        )
     }
 
     func viewAppeared() {
-        bluetoothStateText = "Bluetooth state: \(centralManager.state.debugDescription)"
+        if centralManager == nil {
+            createCentralManager(reason: "view appeared")
+        }
+
+        refreshBluetoothStateText()
         connectionStateText = "Ready"
         debugMessage = "View appeared. Tap Scan and Connect to start BLE scanning."
+        scheduleBluetoothStateWatchdog()
     }
 
     func scanButtonTapped() {
         scanButtonTapCount += 1
-        debugMessage = "Scan button tapped \(scanButtonTapCount) time(s). Bluetooth state: \(centralManager.state.debugDescription)."
+
+        if centralManager == nil {
+            createCentralManager(reason: "scan button tapped")
+        }
+
+        refreshBluetoothStateText()
+        debugMessage = "Scan button tapped \(scanButtonTapCount) time(s). Bluetooth state: \(currentBluetoothState.debugDescription)."
         startScanning()
     }
 
@@ -63,9 +73,47 @@ final class BLECounterManager: NSObject, ObservableObject {
         disconnect()
     }
 
+    func recreateBluetoothManagerTapped() {
+        hasRecreatedUnknownCentralManager = false
+        createCentralManager(reason: "manual reset button")
+        connectionStateText = "Bluetooth reset"
+        debugMessage = "Recreated CoreBluetooth manager. Watch for state callbacks and then tap Scan and Connect."
+        scheduleBluetoothStateWatchdog()
+    }
+
+    private var currentBluetoothState: CBManagerState {
+        centralManager?.state ?? .unknown
+    }
+
+    private func createCentralManager(reason: String) {
+        stopScanning(clearPendingScan: false)
+        centralManager = nil
+        centralManagerCreateCount += 1
+        stateUpdateCallbackCount = 0
+        bluetoothStateText = "Bluetooth state: creating manager"
+        debugMessage = "Creating CoreBluetooth manager #\(centralManagerCreateCount) (\(reason))."
+
+        centralManager = CBCentralManager(
+            delegate: self,
+            queue: .main,
+            options: [CBCentralManagerOptionShowPowerAlertKey: true]
+        )
+    }
+
+    private func refreshBluetoothStateText() {
+        bluetoothStateText = "Bluetooth state: \(currentBluetoothState.debugDescription)"
+    }
+
     private func startScanning() {
         guard !isConnected else {
             debugMessage = "Already connected to ESP32."
+            return
+        }
+
+        guard let centralManager else {
+            createCentralManager(reason: "start scan without manager")
+            pendingScanAfterBluetoothPowersOn = true
+            connectionStateText = "Waiting for Bluetooth"
             return
         }
 
@@ -73,8 +121,9 @@ final class BLECounterManager: NSObject, ObservableObject {
             pendingScanAfterBluetoothPowersOn = true
             isScanning = false
             connectionStateText = "Waiting for Bluetooth"
-            bluetoothStateText = "Bluetooth state: \(centralManager.state.debugDescription)"
+            refreshBluetoothStateText()
             debugMessage = "Scan requested, but Bluetooth is \(centralManager.state.debugDescription). Waiting for CoreBluetooth to become poweredOn."
+            scheduleBluetoothStateWatchdog()
             return
         }
 
@@ -111,11 +160,11 @@ final class BLECounterManager: NSObject, ObservableObject {
             return
         }
 
-        centralManager.cancelPeripheralConnection(esp32Peripheral)
+        centralManager?.cancelPeripheralConnection(esp32Peripheral)
     }
 
     private func stopScanning(clearPendingScan: Bool = true) {
-        centralManager.stopScan()
+        centralManager?.stopScan()
         scanTimeoutTimer?.invalidate()
         scanTimeoutTimer = nil
         isScanning = false
@@ -133,11 +182,43 @@ final class BLECounterManager: NSObject, ObservableObject {
         connectionStateText = "Not found"
         debugMessage = "Scan timed out after 15 seconds. Found \(discoveredDevices.count) BLE device(s), but not \(deviceName)."
     }
+
+    private func scheduleBluetoothStateWatchdog() {
+        bluetoothStateWatchdogTimer?.invalidate()
+
+        bluetoothStateWatchdogTimer = Timer.scheduledTimer(withTimeInterval: 3, repeats: false) { [weak self] _ in
+            self?.handleBluetoothStateWatchdog()
+        }
+    }
+
+    private func handleBluetoothStateWatchdog() {
+        refreshBluetoothStateText()
+
+        guard currentBluetoothState == .unknown else {
+            return
+        }
+
+        if !hasRecreatedUnknownCentralManager {
+            hasRecreatedUnknownCentralManager = true
+            createCentralManager(reason: "state stuck unknown after 3 seconds")
+            debugMessage = "Bluetooth stayed unknown for 3 seconds, so the app recreated the CoreBluetooth manager once."
+            scheduleBluetoothStateWatchdog()
+            return
+        }
+
+        connectionStateText = "Bluetooth stuck"
+        debugMessage = "Bluetooth is still unknown. Check that the app target has NSBluetoothAlwaysUsageDescription, Bluetooth permission is allowed, and this is running on a real iPhone."
+    }
 }
 
 extension BLECounterManager: CBCentralManagerDelegate {
     func centralManagerDidUpdateState(_ central: CBCentralManager) {
+        stateUpdateCallbackCount += 1
         bluetoothStateText = "Bluetooth state: \(central.state.debugDescription)"
+
+        if central.state != .unknown {
+            bluetoothStateWatchdogTimer?.invalidate()
+        }
 
         switch central.state {
         case .poweredOn:
@@ -168,11 +249,13 @@ extension BLECounterManager: CBCentralManagerDelegate {
             isConnected = false
             connectionStateText = "Bluetooth resetting"
             debugMessage = "Bluetooth is resetting. Try again in a moment."
+            scheduleBluetoothStateWatchdog()
         case .unknown:
             stopScanning(clearPendingScan: false)
             isConnected = false
             connectionStateText = "Bluetooth unknown"
             debugMessage = "Waiting for Bluetooth state..."
+            scheduleBluetoothStateWatchdog()
         @unknown default:
             stopScanning(clearPendingScan: true)
             isConnected = false
