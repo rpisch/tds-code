@@ -20,8 +20,11 @@ This folder contains the SwiftUI side of the ESP32 BLE counter test.
 
 ## Phone Debug Checklist
 
-- The top of the app should show `Debug UI v3`. If it does not, the phone is running an old build or Xcode is not using this `ContentView.swift`.
-- If the button changes to `Scanning...`, the button is working and CoreBluetooth is scanning.
+- The top of the app should show `Debug UI v4`. If it does not, the phone is running an old build or Xcode is not using this `ContentView.swift`.
+- The debug area should show `BLE manager v4 loaded`. If it does not, Xcode is not using this `BLECounterManager.swift`.
+- Pressing `Scan and Connect` should increment `Scan button taps`. If it does not, the button action is not connected to this manager instance.
+- If the button tap count increments but Bluetooth says `unknown`, wait a few seconds or tap again. The manager now remembers the scan request until CoreBluetooth becomes `poweredOn`.
+- If Bluetooth says `poweredOn` and the button changes to `Scanning...`, CoreBluetooth is scanning.
 - If it says `Bluetooth unauthorized`, open iPhone Settings for the app and allow Bluetooth.
 - If nearby BLE devices appear but not `ESP32-TDS-BLE`, the iPhone is scanning but the ESP32 is not advertising in a way the app can see.
 - If no nearby BLE devices appear after 15 seconds, test with nRF Connect or LightBlue to confirm the phone can see BLE advertisements.

@@ -51,8 +51,16 @@ void setup() {
   counterService->start();
 
   BLEAdvertising *advertising = BLEDevice::getAdvertising();
-  advertising->addServiceUUID(SERVICE_UUID);
-  advertising->setScanResponse(true);
+
+  BLEAdvertisementData advertisementData;
+  advertisementData.setFlags(0x06);
+  advertisementData.setCompleteServices(BLEUUID(SERVICE_UUID));
+  advertising->setAdvertisementData(advertisementData);
+
+  BLEAdvertisementData scanResponseData;
+  scanResponseData.setName(DEVICE_NAME);
+  advertising->setScanResponseData(scanResponseData);
+
   advertising->setMinPreferred(0x06);
   advertising->setMinPreferred(0x12);
 
@@ -87,7 +95,7 @@ void loop() {
 
   if (!deviceConnected && previousDeviceConnected) {
     delay(500);
-    server->startAdvertising();
+    BLEDevice::startAdvertising();
     Serial.println("Restarted BLE advertising.");
     previousDeviceConnected = deviceConnected;
   }

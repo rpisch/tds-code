@@ -14,13 +14,13 @@ struct ContentView: View {
             .padding()
         }
         .onAppear {
-            bleManager.startScanning()
+            bleManager.viewAppeared()
         }
     }
 
     private var header: some View {
         VStack(spacing: 8) {
-            Text("Debug UI v3")
+            Text("Debug UI v4")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.orange)
 
@@ -42,13 +42,13 @@ struct ContentView: View {
     private var controls: some View {
         VStack(spacing: 12) {
             Button(bleManager.isConnected ? "Connected" : (bleManager.isScanning ? "Scanning..." : "Scan and Connect")) {
-                bleManager.startScanning()
+                bleManager.scanButtonTapped()
             }
             .buttonStyle(.borderedProminent)
-            .disabled(bleManager.isScanning || bleManager.isConnected)
+            .disabled(bleManager.isConnected)
 
             Button(bleManager.isScanning ? "Stop Scan" : "Disconnect") {
-                bleManager.disconnect()
+                bleManager.stopScanOrDisconnectTapped()
             }
             .buttonStyle(.bordered)
             .disabled(!bleManager.isConnected && !bleManager.isScanning)
@@ -58,6 +58,21 @@ struct ContentView: View {
     private var debugSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             VStack(spacing: 8) {
+                Text(bleManager.managerVersionText)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.blue)
+                    .frame(maxWidth: .infinity)
+
+                Text(bleManager.bluetoothStateText)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity)
+
+                Text("Scan button taps: \(bleManager.scanButtonTapCount)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity)
+
                 Text(bleManager.debugMessage)
                     .font(.footnote)
                     .foregroundStyle(.secondary)

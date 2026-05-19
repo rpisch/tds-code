@@ -3,12 +3,15 @@ import CoreBluetooth
 import Foundation
 
 final class BLECounterManager: NSObject, ObservableObject {
+    @Published var managerVersionText = "BLE manager v4 loaded"
     @Published var latestValue: UInt8?
     @Published var isScanning = false
     @Published var isConnected = false
     @Published var connectionStateText = "Not started"
+    @Published var bluetoothStateText = "Bluetooth state: unknown"
     @Published var debugMessage = "Open the ESP32 Serial Monitor for matching connection logs."
     @Published var discoveredDevices: [String] = []
+    @Published var scanButtonTapCount = 0
 
     private let deviceName = "ESP32-TDS-BLE"
     private let serviceUUID = CBUUID(string: "7B6A0001-9F7A-4D2B-9A5B-0B1F2A4C1000")
@@ -17,6 +20,8 @@ final class BLECounterManager: NSObject, ObservableObject {
     private var centralManager: CBCentralManager!
     private var esp32Peripheral: CBPeripheral?
     private var scanTimeoutTimer: Timer?
+    private var pendingScanAfterBluetoothPowersOn = false
+    private var discoveredDeviceSummariesByID: [UUID: String] = [:]
 
     var latestValueText: String {
         if let latestValue {
@@ -28,18 +33,48 @@ final class BLECounterManager: NSObject, ObservableObject {
 
     override init() {
         super.init()
-        centralManager = CBCentralManager(delegate: self, queue: .main)
+        centralManager = CBCentralManager(
+            delegate: self,
+            queue: .main,
+            options: [CBCentralManagerOptionShowPowerAlertKey: true]
+        )
     }
 
-    func startScanning() {
+    func viewAppeared() {
+        bluetoothStateText = "Bluetooth state: \(centralManager.state.debugDescription)"
+        connectionStateText = "Ready"
+        debugMessage = "View appeared. Tap Scan and Connect to start BLE scanning."
+    }
+
+    func scanButtonTapped() {
+        scanButtonTapCount += 1
+        debugMessage = "Scan button tapped \(scanButtonTapCount) time(s). Bluetooth state: \(centralManager.state.debugDescription)."
+        startScanning()
+    }
+
+    func stopScanOrDisconnectTapped() {
+        if isScanning {
+            stopScanning(clearPendingScan: true)
+            connectionStateText = "Scan stopped"
+            debugMessage = "Scan stopped by button."
+            return
+        }
+
+        disconnect()
+    }
+
+    private func startScanning() {
         guard !isConnected else {
             debugMessage = "Already connected to ESP32."
             return
         }
 
         guard centralManager.state == .poweredOn else {
-            connectionStateText = "Bluetooth unavailable"
-            debugMessage = "Bluetooth state: \(centralManager.state.debugDescription)"
+            pendingScanAfterBluetoothPowersOn = true
+            isScanning = false
+            connectionStateText = "Waiting for Bluetooth"
+            bluetoothStateText = "Bluetooth state: \(centralManager.state.debugDescription)"
+            debugMessage = "Scan requested, but Bluetooth is \(centralManager.state.debugDescription). Waiting for CoreBluetooth to become poweredOn."
             return
         }
 
@@ -50,7 +85,10 @@ final class BLECounterManager: NSObject, ObservableObject {
         isScanning = true
         isConnected = false
         connectionStateText = "Scanning"
+        bluetoothStateText = "Bluetooth state: poweredOn"
         debugMessage = "Scanning for BLE devices. Waiting for \(deviceName)..."
+        pendingScanAfterBluetoothPowersOn = false
+        discoveredDeviceSummariesByID = [:]
         discoveredDevices = []
 
         // Scan broadly while debugging. Some ESP32 setups advertise the name before
@@ -65,9 +103,9 @@ final class BLECounterManager: NSObject, ObservableObject {
         }
     }
 
-    func disconnect() {
+    private func disconnect() {
         guard let esp32Peripheral else {
-            stopScanning()
+            stopScanning(clearPendingScan: true)
             connectionStateText = "Disconnected"
             debugMessage = "No ESP32 connection is active."
             return
@@ -76,11 +114,14 @@ final class BLECounterManager: NSObject, ObservableObject {
         centralManager.cancelPeripheralConnection(esp32Peripheral)
     }
 
-    private func stopScanning() {
+    private func stopScanning(clearPendingScan: Bool = true) {
         centralManager.stopScan()
         scanTimeoutTimer?.invalidate()
         scanTimeoutTimer = nil
         isScanning = false
+        if clearPendingScan {
+            pendingScanAfterBluetoothPowersOn = false
+        }
     }
 
     private func handleScanTimeout() {
@@ -88,7 +129,7 @@ final class BLECounterManager: NSObject, ObservableObject {
             return
         }
 
-        stopScanning()
+        stopScanning(clearPendingScan: true)
         connectionStateText = "Not found"
         debugMessage = "Scan timed out after 15 seconds. Found \(discoveredDevices.count) BLE device(s), but not \(deviceName)."
     }
@@ -96,38 +137,44 @@ final class BLECounterManager: NSObject, ObservableObject {
 
 extension BLECounterManager: CBCentralManagerDelegate {
     func centralManagerDidUpdateState(_ central: CBCentralManager) {
+        bluetoothStateText = "Bluetooth state: \(central.state.debugDescription)"
+
         switch central.state {
         case .poweredOn:
             connectionStateText = "Bluetooth ready"
-            debugMessage = "Ready to scan for ESP32."
-            startScanning()
+            debugMessage = "CoreBluetooth is poweredOn. Ready to scan."
+
+            if pendingScanAfterBluetoothPowersOn {
+                debugMessage = "Bluetooth became poweredOn after a scan request. Starting scan now."
+                startScanning()
+            }
         case .poweredOff:
-            stopScanning()
+            stopScanning(clearPendingScan: true)
             isConnected = false
             connectionStateText = "Bluetooth off"
             debugMessage = "Turn on Bluetooth on this iPhone."
         case .unauthorized:
-            stopScanning()
+            stopScanning(clearPendingScan: true)
             isConnected = false
             connectionStateText = "Bluetooth unauthorized"
             debugMessage = "Allow Bluetooth access for this app in Settings."
         case .unsupported:
-            stopScanning()
+            stopScanning(clearPendingScan: true)
             isConnected = false
             connectionStateText = "Bluetooth unsupported"
             debugMessage = "This device does not support Bluetooth LE central mode."
         case .resetting:
-            stopScanning()
+            stopScanning(clearPendingScan: false)
             isConnected = false
             connectionStateText = "Bluetooth resetting"
             debugMessage = "Bluetooth is resetting. Try again in a moment."
         case .unknown:
-            stopScanning()
+            stopScanning(clearPendingScan: false)
             isConnected = false
             connectionStateText = "Bluetooth unknown"
             debugMessage = "Waiting for Bluetooth state..."
         @unknown default:
-            stopScanning()
+            stopScanning(clearPendingScan: true)
             isConnected = false
             connectionStateText = "Bluetooth error"
             debugMessage = "Unknown Bluetooth state: \(central.state.rawValue)"
@@ -148,14 +195,20 @@ extension BLECounterManager: CBCentralManagerDelegate {
         let serviceMatches = advertisedServices.contains(serviceUUID) || overflowServices.contains(serviceUUID)
         let nameMatches = advertisedName == deviceName || peripheralName == deviceName
 
-        rememberDiscoveredDevice(name: foundName, rssi: RSSI, serviceMatches: serviceMatches)
+        rememberDiscoveredDevice(
+            id: peripheral.identifier,
+            name: foundName,
+            rssi: RSSI,
+            advertisedServices: advertisedServices,
+            serviceMatches: serviceMatches
+        )
 
         guard nameMatches || serviceMatches else {
             debugMessage = "Scanning... saw \(discoveredDevices.count) BLE device(s). Waiting for \(deviceName)."
             return
         }
 
-        stopScanning()
+        stopScanning(clearPendingScan: true)
         connectionStateText = "Connecting"
         debugMessage = "Found \(foundName), RSSI \(RSSI)."
 
@@ -176,7 +229,7 @@ extension BLECounterManager: CBCentralManagerDelegate {
         didFailToConnect peripheral: CBPeripheral,
         error: Error?
     ) {
-        stopScanning()
+        stopScanning(clearPendingScan: true)
         isConnected = false
         connectionStateText = "Disconnected"
         debugMessage = "Failed to connect: \(error?.localizedDescription ?? "No error details")."
@@ -187,26 +240,28 @@ extension BLECounterManager: CBCentralManagerDelegate {
         didDisconnectPeripheral peripheral: CBPeripheral,
         error: Error?
     ) {
-        stopScanning()
+        stopScanning(clearPendingScan: true)
         isConnected = false
         esp32Peripheral = nil
         connectionStateText = "Disconnected"
         debugMessage = error?.localizedDescription ?? "Disconnected from ESP32."
     }
 
-    private func rememberDiscoveredDevice(name: String, rssi: NSNumber, serviceMatches: Bool) {
+    private func rememberDiscoveredDevice(
+        id: UUID,
+        name: String,
+        rssi: NSNumber,
+        advertisedServices: [CBUUID],
+        serviceMatches: Bool
+    ) {
         let marker = serviceMatches ? "service match" : "BLE"
-        let summary = "\(name) | RSSI \(rssi) | \(marker)"
+        let shortID = id.uuidString.prefix(8)
+        let services = advertisedServices.map(\.uuidString).joined(separator: ", ")
+        let serviceText = services.isEmpty ? "no advertised services" : services
+        let summary = "\(name) | \(shortID) | RSSI \(rssi) | \(marker) | \(serviceText)"
 
-        discoveredDevices.removeAll { existing in
-            existing.hasPrefix("\(name) |")
-        }
-
-        discoveredDevices.insert(summary, at: 0)
-
-        if discoveredDevices.count > 8 {
-            discoveredDevices.removeLast(discoveredDevices.count - 8)
-        }
+        discoveredDeviceSummariesByID[id] = summary
+        discoveredDevices = Array(discoveredDeviceSummariesByID.values).sorted()
     }
 }
 
