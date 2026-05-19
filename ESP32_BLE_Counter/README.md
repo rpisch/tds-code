@@ -4,12 +4,12 @@ This Arduino sketch turns an ESP32 into a BLE peripheral named `ESP32-TDS-BLE`.
 
 It exposes one custom BLE service and one custom characteristic:
 
-- Service UUID: `7B6A0001-9F7A-4D2B-9A5B-0B1F2A4C1000`
-- Counter characteristic UUID: `7B6A0002-9F7A-4D2B-9A5B-0B1F2A4C1000`
+- Service UUID: `4fafc201-1fb5-459e-8fcc-c5c9c331914b`
+- Counter characteristic UUID: `beb5483e-36e1-4688-b7f5-ea07361b26a8`
 
-The characteristic supports `read` and `notify`. Once per second, the ESP32 updates a binary integer value from `1` through `100`, then wraps back to `1`. The value is sent as a single unsigned byte because the test range fits in one byte.
+The characteristic supports `read`, `write`, and `notify`. Once per second, the ESP32 updates a binary integer value from `1` through `100`, then wraps back to `1`. The value is sent as a 4-byte little-endian signed integer.
 
-The sketch explicitly advertises the custom service UUID and puts the device name in BLE scan response data. This makes the iPhone app able to find the ESP32 either by service UUID or by the `ESP32-TDS-BLE` name during debugging.
+This version follows the same simple shape as the working reference project: create a BLE server, create one custom service and characteristic, start the service, get advertising from the server, add the service UUID, enable scan response, and start advertising.
 
 ## Arduino Setup
 
@@ -26,8 +26,8 @@ After reset, you should see:
 ```text
 ESP32 BLE counter started.
 Advertising as ESP32-TDS-BLE
-Service UUID: 7B6A0001-9F7A-4D2B-9A5B-0B1F2A4C1000
-Characteristic UUID: 7B6A0002-9F7A-4D2B-9A5B-0B1F2A4C1000
+Service UUID: 4fafc201-1fb5-459e-8fcc-c5c9c331914b
+Characteristic UUID: beb5483e-36e1-4688-b7f5-ea07361b26a8
 Updated value: 1 (waiting for BLE connection)
 ```
 
