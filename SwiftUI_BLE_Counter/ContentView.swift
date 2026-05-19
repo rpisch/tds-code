@@ -20,6 +20,10 @@ struct ContentView: View {
 
     private var header: some View {
         VStack(spacing: 8) {
+            Text("Debug UI v3")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.orange)
+
             Text("ESP32 BLE Counter")
                 .font(.title2.weight(.semibold))
 

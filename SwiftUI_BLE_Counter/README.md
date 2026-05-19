@@ -20,6 +20,7 @@ This folder contains the SwiftUI side of the ESP32 BLE counter test.
 
 ## Phone Debug Checklist
 
+- The top of the app should show `Debug UI v3`. If it does not, the phone is running an old build or Xcode is not using this `ContentView.swift`.
 - If the button changes to `Scanning...`, the button is working and CoreBluetooth is scanning.
 - If it says `Bluetooth unauthorized`, open iPhone Settings for the app and allow Bluetooth.
 - If nearby BLE devices appear but not `ESP32-TDS-BLE`, the iPhone is scanning but the ESP32 is not advertising in a way the app can see.
