@@ -9,7 +9,8 @@ struct ContentView: View {
                 header
                 valueDisplay
                 controls
-                diagnostics
+                status
+                discoveredDevices
             }
             .padding()
         }
@@ -48,42 +49,30 @@ struct ContentView: View {
         }
     }
 
-    private var diagnostics: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text(bleManager.debugMessage)
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity, alignment: .center)
-                .multilineTextAlignment(.center)
+    private var status: some View {
+        Text(bleManager.statusMessage)
+            .font(.footnote)
+            .foregroundStyle(.secondary)
+            .multilineTextAlignment(.center)
+    }
 
-            Divider()
-
-            Text(bleManager.bluetoothStateText)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-
-            Text(bleManager.bluetoothAuthorizationText)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-
-            Text(bleManager.infoPlistBluetoothKeyText)
-                .font(.caption)
-                .foregroundStyle(bleManager.infoPlistBluetoothKeyText.contains("missing") ? .red : .secondary)
-
+    private var discoveredDevices: some View {
+        Group {
             if !bleManager.discoveredDevices.isEmpty {
-                Text("Nearby BLE Devices")
-                    .font(.headline)
-                    .padding(.top, 8)
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Nearby BLE Devices")
+                        .font(.headline)
 
-                ForEach(bleManager.discoveredDevices, id: \.self) { device in
-                    Text(device)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .textSelection(.enabled)
+                    ForEach(bleManager.discoveredDevices, id: \.self) { device in
+                        Text(device)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                    }
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 

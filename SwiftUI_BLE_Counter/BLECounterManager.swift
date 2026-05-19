@@ -5,24 +5,19 @@ import Foundation
 final class BLECounterManager: NSObject, ObservableObject {
     @Published var latestValue: Int?
     @Published var connectionStateText = "Starting Bluetooth"
-    @Published var bluetoothStateText = "Bluetooth state: unknown"
-    @Published var bluetoothAuthorizationText = "Bluetooth authorization: unknown"
-    @Published var infoPlistBluetoothKeyText = "Info.plist Bluetooth key: unchecked"
-    @Published var debugMessage = "Waiting for CoreBluetooth..."
+    @Published var statusMessage = "Waiting for CoreBluetooth..."
     @Published var discoveredDevices: [String] = []
     @Published var isScanning = false
     @Published var isConnected = false
 
     private let deviceName = "ESP32-TDS-BLE"
-    private let legacyReferenceDeviceName = "BLE_DEVICE"
     private let serviceUUID = CBUUID(string: "4FAFC201-1FB5-459E-8FCC-C5C9C331914B")
     private let counterCharacteristicUUID = CBUUID(string: "BEB5483E-36E1-4688-B7F5-EA07361B26A8")
 
     private var centralManager: CBCentralManager!
     private var connectedPeripheral: CBPeripheral?
-    private var counterCharacteristic: CBCharacteristic?
-    private var pendingScanRequest = false
     private var scanTimeoutTimer: Timer?
+    private var pendingScanRequest = false
     private var discoveredDeviceIDs = Set<UUID>()
 
     var latestValueText: String {
@@ -35,17 +30,14 @@ final class BLECounterManager: NSObject, ObservableObject {
 
     override init() {
         super.init()
-        refreshRuntimeDiagnostics()
-        centralManager = CBCentralManager(delegate: self, queue: nil)
+        centralManager = CBCentralManager(delegate: self, queue: .main)
     }
 
     func startScanning() {
-        refreshRuntimeDiagnostics()
-
         guard centralManager.state == .poweredOn else {
             pendingScanRequest = true
             connectionStateText = "Waiting for Bluetooth"
-            debugMessage = "Scan requested, but CoreBluetooth is \(centralManager.state.debugDescription). Waiting for poweredOn."
+            statusMessage = "Bluetooth is \(centralManager.state.debugDescription). Waiting for poweredOn."
             return
         }
 
@@ -53,10 +45,10 @@ final class BLECounterManager: NSObject, ObservableObject {
         latestValue = nil
         discoveredDevices = []
         discoveredDeviceIDs = []
-        isScanning = true
         isConnected = false
+        isScanning = true
         connectionStateText = "Scanning"
-        debugMessage = "Scanning for \(deviceName). Keep the ESP32 powered and advertising."
+        statusMessage = "Scanning for \(deviceName)..."
 
         centralManager.stopScan()
         centralManager.scanForPeripherals(
@@ -76,7 +68,7 @@ final class BLECounterManager: NSObject, ObservableObject {
         guard let connectedPeripheral else {
             isConnected = false
             connectionStateText = "Disconnected"
-            debugMessage = "No ESP32 peripheral is connected."
+            statusMessage = "No ESP32 peripheral is connected."
             return
         }
 
@@ -97,18 +89,7 @@ final class BLECounterManager: NSObject, ObservableObject {
 
         stopScanning()
         connectionStateText = "ESP32 not found"
-        debugMessage = "Scan timed out. Saw \(discoveredDevices.count) BLE device(s), but not \(deviceName)."
-    }
-
-    private func refreshRuntimeDiagnostics() {
-        bluetoothAuthorizationText = "Bluetooth authorization: \(CBManager.authorization.debugDescription)"
-
-        if let message = Bundle.main.object(forInfoDictionaryKey: "NSBluetoothAlwaysUsageDescription") as? String,
-           !message.isEmpty {
-            infoPlistBluetoothKeyText = "Info.plist Bluetooth key: present"
-        } else {
-            infoPlistBluetoothKeyText = "Info.plist Bluetooth key: missing NSBluetoothAlwaysUsageDescription"
-        }
+        statusMessage = "Scan timed out. Saw \(discoveredDevices.count) BLE device(s), but not \(deviceName)."
     }
 
     private func rememberDiscoveredDevice(_ peripheral: CBPeripheral, advertisedName: String?, rssi: NSNumber) {
@@ -117,21 +98,18 @@ final class BLECounterManager: NSObject, ObservableObject {
         }
 
         discoveredDeviceIDs.insert(peripheral.identifier)
-        let name = advertisedName ?? peripheral.name ?? "unnamed BLE device"
-        let shortID = peripheral.identifier.uuidString.prefix(8)
-        discoveredDevices.insert("\(name) | \(shortID) | RSSI \(rssi)", at: 0)
 
-        if discoveredDevices.count > 12 {
-            discoveredDevices.removeLast(discoveredDevices.count - 12)
+        let name = advertisedName ?? peripheral.name ?? "unnamed BLE device"
+        discoveredDevices.insert("\(name) | RSSI \(rssi)", at: 0)
+
+        if discoveredDevices.count > 8 {
+            discoveredDevices.removeLast(discoveredDevices.count - 8)
         }
     }
 
     private func isTargetPeripheral(_ peripheral: CBPeripheral, advertisedName: String?, advertisedServices: [CBUUID]) -> Bool {
         let names = [advertisedName, peripheral.name].compactMap { $0 }
-        let nameMatches = names.contains(deviceName) || names.contains(legacyReferenceDeviceName)
-        let serviceMatches = advertisedServices.contains(serviceUUID)
-
-        return nameMatches || serviceMatches
+        return names.contains(deviceName) || advertisedServices.contains(serviceUUID)
     }
 
     private func integerValue(from data: Data) -> Int? {
@@ -154,13 +132,10 @@ final class BLECounterManager: NSObject, ObservableObject {
 
 extension BLECounterManager: CBCentralManagerDelegate {
     func centralManagerDidUpdateState(_ central: CBCentralManager) {
-        refreshRuntimeDiagnostics()
-        bluetoothStateText = "Bluetooth state: \(central.state.debugDescription)"
-
         switch central.state {
         case .poweredOn:
             connectionStateText = "Bluetooth ready"
-            debugMessage = "Bluetooth is poweredOn. Tap Scan and Connect."
+            statusMessage = "Bluetooth is ready. Tap Scan and Connect."
 
             if pendingScanRequest {
                 startScanning()
@@ -168,26 +143,26 @@ extension BLECounterManager: CBCentralManagerDelegate {
         case .poweredOff:
             stopScanning()
             connectionStateText = "Bluetooth off"
-            debugMessage = "Turn on Bluetooth in iPhone Settings or Control Center."
+            statusMessage = "Turn on Bluetooth on the iPhone."
         case .unauthorized:
             stopScanning()
             connectionStateText = "Bluetooth unauthorized"
-            debugMessage = "Allow Bluetooth for this app in iPhone Settings."
+            statusMessage = "Allow Bluetooth access for this app in iPhone Settings."
         case .unsupported:
             stopScanning()
             connectionStateText = "Bluetooth unsupported"
-            debugMessage = "This device does not support Bluetooth LE central mode."
+            statusMessage = "This device does not support Bluetooth LE central mode."
         case .resetting:
             stopScanning()
             connectionStateText = "Bluetooth resetting"
-            debugMessage = "Bluetooth is resetting. Try scanning again in a moment."
+            statusMessage = "Bluetooth is resetting. Try scanning again in a moment."
         case .unknown:
             connectionStateText = "Bluetooth unknown"
-            debugMessage = "CoreBluetooth has not reported a usable state yet."
+            statusMessage = "Waiting for CoreBluetooth to report its state."
         @unknown default:
             stopScanning()
             connectionStateText = "Bluetooth error"
-            debugMessage = "Unknown Bluetooth state: \(central.state.rawValue)."
+            statusMessage = "Unknown Bluetooth state: \(central.state.rawValue)."
         }
     }
 
@@ -199,10 +174,11 @@ extension BLECounterManager: CBCentralManagerDelegate {
     ) {
         let advertisedName = advertisementData[CBAdvertisementDataLocalNameKey] as? String
         let advertisedServices = advertisementData[CBAdvertisementDataServiceUUIDsKey] as? [CBUUID] ?? []
+
         rememberDiscoveredDevice(peripheral, advertisedName: advertisedName, rssi: RSSI)
 
         guard isTargetPeripheral(peripheral, advertisedName: advertisedName, advertisedServices: advertisedServices) else {
-            debugMessage = "Scanning... saw \(discoveredDevices.count) BLE device(s). Waiting for \(deviceName)."
+            statusMessage = "Scanning... saw \(discoveredDevices.count) BLE device(s). Waiting for \(deviceName)."
             return
         }
 
@@ -210,14 +186,14 @@ extension BLECounterManager: CBCentralManagerDelegate {
         connectedPeripheral = peripheral
         connectedPeripheral?.delegate = self
         connectionStateText = "Connecting"
-        debugMessage = "Found \(advertisedName ?? peripheral.name ?? deviceName). Connecting..."
+        statusMessage = "Found \(advertisedName ?? peripheral.name ?? deviceName). Connecting..."
         central.connect(peripheral, options: nil)
     }
 
     func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
         isConnected = true
         connectionStateText = "Connected"
-        debugMessage = "Connected. Discovering BLE services..."
+        statusMessage = "Connected. Discovering BLE services..."
         peripheral.discoverServices(nil)
     }
 
@@ -225,15 +201,14 @@ extension BLECounterManager: CBCentralManagerDelegate {
         isConnected = false
         connectedPeripheral = nil
         connectionStateText = "Connection failed"
-        debugMessage = error?.localizedDescription ?? "Failed to connect to ESP32."
+        statusMessage = error?.localizedDescription ?? "Failed to connect to ESP32."
     }
 
     func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
         isConnected = false
         connectedPeripheral = nil
-        counterCharacteristic = nil
         connectionStateText = "Disconnected"
-        debugMessage = error?.localizedDescription ?? "Disconnected from ESP32."
+        statusMessage = error?.localizedDescription ?? "Disconnected from ESP32."
     }
 }
 
@@ -241,21 +216,14 @@ extension BLECounterManager: CBPeripheralDelegate {
     func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
         if let error {
             connectionStateText = "Service error"
-            debugMessage = "Service discovery failed: \(error.localizedDescription)"
+            statusMessage = "Service discovery failed: \(error.localizedDescription)"
             return
         }
 
         guard let services = peripheral.services, !services.isEmpty else {
             connectionStateText = "No services"
-            debugMessage = "Connected, but no BLE services were found."
+            statusMessage = "Connected, but no BLE services were found."
             return
-        }
-
-        if services.contains(where: { $0.uuid == serviceUUID }) {
-            debugMessage = "Counter service found. Discovering characteristics..."
-        } else {
-            let serviceList = services.map(\.uuid.uuidString).joined(separator: ", ")
-            debugMessage = "Target service not found yet. Discovered: \(serviceList)"
         }
 
         for service in services {
@@ -266,7 +234,7 @@ extension BLECounterManager: CBPeripheralDelegate {
     func peripheral(_ peripheral: CBPeripheral, didDiscoverCharacteristicsFor service: CBService, error: Error?) {
         if let error {
             connectionStateText = "Characteristic error"
-            debugMessage = "Characteristic discovery failed: \(error.localizedDescription)"
+            statusMessage = "Characteristic discovery failed: \(error.localizedDescription)"
             return
         }
 
@@ -275,9 +243,8 @@ extension BLECounterManager: CBPeripheralDelegate {
         }
 
         for characteristic in characteristics where characteristic.uuid == counterCharacteristicUUID {
-            counterCharacteristic = characteristic
             connectionStateText = "Subscribed"
-            debugMessage = "Counter characteristic found. Waiting for values..."
+            statusMessage = "Counter characteristic found. Waiting for values..."
 
             if characteristic.properties.contains(.read) {
                 peripheral.readValue(for: characteristic)
@@ -291,7 +258,7 @@ extension BLECounterManager: CBPeripheralDelegate {
 
     func peripheral(_ peripheral: CBPeripheral, didUpdateValueFor characteristic: CBCharacteristic, error: Error?) {
         if let error {
-            debugMessage = "Value update failed: \(error.localizedDescription)"
+            statusMessage = "Value update failed: \(error.localizedDescription)"
             return
         }
 
@@ -300,23 +267,23 @@ extension BLECounterManager: CBPeripheralDelegate {
         }
 
         guard let data = characteristic.value, let value = integerValue(from: data) else {
-            debugMessage = "Counter characteristic did not contain integer data."
+            statusMessage = "Counter characteristic did not contain integer data."
             return
         }
 
         latestValue = value
         connectionStateText = "Receiving"
-        debugMessage = "Received \(value) from ESP32."
+        statusMessage = "Received \(value) from ESP32."
     }
 
     func peripheral(_ peripheral: CBPeripheral, didUpdateNotificationStateFor characteristic: CBCharacteristic, error: Error?) {
         if let error {
-            debugMessage = "Notification setup failed: \(error.localizedDescription)"
+            statusMessage = "Notification setup failed: \(error.localizedDescription)"
             return
         }
 
         if characteristic.uuid == counterCharacteristicUUID, characteristic.isNotifying {
-            debugMessage = "Notification subscription is active. Waiting for the next counter update."
+            statusMessage = "Notification subscription is active. Waiting for values..."
         }
     }
 }
@@ -338,23 +305,6 @@ private extension CBManagerState {
             return "poweredOn"
         @unknown default:
             return "unknown future state \(rawValue)"
-        }
-    }
-}
-
-private extension CBManagerAuthorization {
-    var debugDescription: String {
-        switch self {
-        case .notDetermined:
-            return "notDetermined"
-        case .restricted:
-            return "restricted"
-        case .denied:
-            return "denied"
-        case .allowedAlways:
-            return "allowedAlways"
-        @unknown default:
-            return "unknown future authorization \(rawValue)"
         }
     }
 }
