@@ -6,9 +6,5 @@
     <string>This app uses Bluetooth to receive counter values from an ESP32.</string>
     <key>NSBluetoothPeripheralUsageDescription</key>
     <string>This app uses Bluetooth to receive counter values from an ESP32.</string>
-    <key>UIBackgroundModes</key>
-    <array>
-        <string>bluetooth-central</string>
-    </array>
 </dict>
 </plist>

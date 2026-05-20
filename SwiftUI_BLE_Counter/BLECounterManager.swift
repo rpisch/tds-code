@@ -16,7 +16,6 @@ final class BLECounterManager: NSObject, ObservableObject {
     private let counterCharacteristicUUID = CBUUID(string: "BEB5483E-36E1-4688-B7F5-EA07361B26A8")
     private let warningThreshold = 20
     private let notificationCenter = UNUserNotificationCenter.current()
-    private let centralManagerRestoreIdentifier = "com.tds.blecounter.central"
 
     private var centralManager: CBCentralManager!
     private var connectedPeripheral: CBPeripheral?
@@ -36,11 +35,7 @@ final class BLECounterManager: NSObject, ObservableObject {
     override init() {
         super.init()
         configureWarningNotifications()
-        centralManager = CBCentralManager(
-            delegate: self,
-            queue: .main,
-            options: [CBCentralManagerOptionRestoreIdentifierKey: centralManagerRestoreIdentifier]
-        )
+        centralManager = CBCentralManager(delegate: self, queue: .main)
     }
 
     func startScanning() {
@@ -62,7 +57,7 @@ final class BLECounterManager: NSObject, ObservableObject {
 
         centralManager.stopScan()
         centralManager.scanForPeripherals(
-            withServices: [serviceUUID],
+            withServices: nil,
             options: [CBCentralManagerScanOptionAllowDuplicatesKey: false]
         )
 
@@ -120,53 +115,6 @@ final class BLECounterManager: NSObject, ObservableObject {
     private func isTargetPeripheral(_ peripheral: CBPeripheral, advertisedName: String?, advertisedServices: [CBUUID]) -> Bool {
         let names = [advertisedName, peripheral.name].compactMap { $0 }
         return names.contains(deviceName) || advertisedServices.contains(serviceUUID)
-    }
-
-    private func discoverCounterService(on peripheral: CBPeripheral) {
-        if let services = peripheral.services, !services.isEmpty {
-            let counterServices = services.filter { $0.uuid == serviceUUID }
-
-            guard !counterServices.isEmpty else {
-                peripheral.discoverServices([serviceUUID])
-                return
-            }
-
-            for service in counterServices {
-                discoverCounterCharacteristic(on: peripheral, service: service)
-            }
-        } else {
-            peripheral.discoverServices([serviceUUID])
-        }
-    }
-
-    private func discoverCounterCharacteristic(on peripheral: CBPeripheral, service: CBService) {
-        if let characteristics = service.characteristics, !characteristics.isEmpty {
-            let counterCharacteristics = characteristics.filter { $0.uuid == counterCharacteristicUUID }
-
-            guard !counterCharacteristics.isEmpty else {
-                peripheral.discoverCharacteristics([counterCharacteristicUUID], for: service)
-                return
-            }
-
-            for characteristic in counterCharacteristics {
-                activateCounterCharacteristic(characteristic, on: peripheral)
-            }
-        } else {
-            peripheral.discoverCharacteristics([counterCharacteristicUUID], for: service)
-        }
-    }
-
-    private func activateCounterCharacteristic(_ characteristic: CBCharacteristic, on peripheral: CBPeripheral) {
-        connectionStateText = "Subscribed"
-        statusMessage = "Counter characteristic found. Waiting for values..."
-
-        if characteristic.properties.contains(.read) {
-            peripheral.readValue(for: characteristic)
-        }
-
-        if characteristic.properties.contains(.notify), !characteristic.isNotifying {
-            peripheral.setNotifyValue(true, for: characteristic)
-        }
     }
 
     private func integerValue(from data: Data) -> Int? {
@@ -240,39 +188,11 @@ final class BLECounterManager: NSObject, ObservableObject {
 }
 
 extension BLECounterManager: CBCentralManagerDelegate {
-    func centralManager(_ central: CBCentralManager, willRestoreState dict: [String: Any]) {
-        let restoredPeripherals = dict[CBCentralManagerRestoredStatePeripheralsKey] as? [CBPeripheral] ?? []
-
-        guard let peripheral = restoredPeripherals.first else {
-            connectionStateText = "Bluetooth restored"
-            statusMessage = "Bluetooth state was restored, but no ESP32 peripheral was available."
-            return
-        }
-
-        stopScanning()
-        connectedPeripheral = peripheral
-        peripheral.delegate = self
-        isConnected = peripheral.state == .connected
-        connectionStateText = "Bluetooth restored"
-        statusMessage = "Restored ESP32 Bluetooth state. Waiting for updates..."
-
-        switch peripheral.state {
-        case .connected:
-            discoverCounterService(on: peripheral)
-        case .connecting:
-            statusMessage = "Restored pending ESP32 connection."
-        default:
-            central.connect(peripheral, options: nil)
-        }
-    }
-
     func centralManagerDidUpdateState(_ central: CBCentralManager) {
         switch central.state {
         case .poweredOn:
-            if connectedPeripheral == nil && !isScanning {
-                connectionStateText = "Bluetooth ready"
-                statusMessage = "Bluetooth is ready. Tap Scan and Connect."
-            }
+            connectionStateText = "Bluetooth ready"
+            statusMessage = "Bluetooth is ready. Tap Scan and Connect."
 
             if pendingScanRequest {
                 startScanning()
@@ -331,7 +251,7 @@ extension BLECounterManager: CBCentralManagerDelegate {
         isConnected = true
         connectionStateText = "Connected"
         statusMessage = "Connected. Discovering BLE services..."
-        discoverCounterService(on: peripheral)
+        peripheral.discoverServices(nil)
     }
 
     func centralManager(_ central: CBCentralManager, didFailToConnect peripheral: CBPeripheral, error: Error?) {
@@ -363,8 +283,8 @@ extension BLECounterManager: CBPeripheralDelegate {
             return
         }
 
-        for service in services where service.uuid == serviceUUID {
-            discoverCounterCharacteristic(on: peripheral, service: service)
+        for service in services {
+            peripheral.discoverCharacteristics(nil, for: service)
         }
     }
 
@@ -380,7 +300,16 @@ extension BLECounterManager: CBPeripheralDelegate {
         }
 
         for characteristic in characteristics where characteristic.uuid == counterCharacteristicUUID {
-            activateCounterCharacteristic(characteristic, on: peripheral)
+            connectionStateText = "Subscribed"
+            statusMessage = "Counter characteristic found. Waiting for values..."
+
+            if characteristic.properties.contains(.read) {
+                peripheral.readValue(for: characteristic)
+            }
+
+            if characteristic.properties.contains(.notify) {
+                peripheral.setNotifyValue(true, for: characteristic)
+            }
         }
     }
 

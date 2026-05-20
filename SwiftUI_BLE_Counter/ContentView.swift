@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct ContentView: View {
-    @ObservedObject var bleManager: BLECounterManager
+    @StateObject private var bleManager = BLECounterManager()
 
     var body: some View {
         ScrollView {
@@ -78,6 +78,6 @@ struct ContentView: View {
 
 struct ContentView_Previews: PreviewProvider {
     static var previews: some View {
-        ContentView(bleManager: BLECounterManager())
+        ContentView()
     }
 }
