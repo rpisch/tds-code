@@ -16,6 +16,7 @@ final class BLECounterManager: NSObject, ObservableObject {
     private let counterCharacteristicUUID = CBUUID(string: "BEB5483E-36E1-4688-B7F5-EA07361B26A8")
     private let warningThreshold = 20
     private let notificationCenter = UNUserNotificationCenter.current()
+    private let centralManagerRestoreIdentifier = "com.tds.blecounter.central"
 
     private var centralManager: CBCentralManager!
     private var connectedPeripheral: CBPeripheral?
@@ -29,13 +30,17 @@ final class BLECounterManager: NSObject, ObservableObject {
             return "--"
         }
 
-        return String(latestValue)
+        return "\(latestValue) ppm"
     }
 
     override init() {
         super.init()
         configureWarningNotifications()
-        centralManager = CBCentralManager(delegate: self, queue: .main)
+        centralManager = CBCentralManager(
+            delegate: self,
+            queue: .main,
+            options: [CBCentralManagerOptionRestoreIdentifierKey: centralManagerRestoreIdentifier]
+        )
     }
 
     func startScanning() {
@@ -57,7 +62,7 @@ final class BLECounterManager: NSObject, ObservableObject {
 
         centralManager.stopScan()
         centralManager.scanForPeripherals(
-            withServices: nil,
+            withServices: [serviceUUID],
             options: [CBCentralManagerScanOptionAllowDuplicatesKey: false]
         )
 
@@ -117,6 +122,53 @@ final class BLECounterManager: NSObject, ObservableObject {
         return names.contains(deviceName) || advertisedServices.contains(serviceUUID)
     }
 
+    private func discoverCounterService(on peripheral: CBPeripheral) {
+        if let services = peripheral.services, !services.isEmpty {
+            let counterServices = services.filter { $0.uuid == serviceUUID }
+
+            guard !counterServices.isEmpty else {
+                peripheral.discoverServices([serviceUUID])
+                return
+            }
+
+            for service in counterServices {
+                discoverCounterCharacteristic(on: peripheral, service: service)
+            }
+        } else {
+            peripheral.discoverServices([serviceUUID])
+        }
+    }
+
+    private func discoverCounterCharacteristic(on peripheral: CBPeripheral, service: CBService) {
+        if let characteristics = service.characteristics, !characteristics.isEmpty {
+            let counterCharacteristics = characteristics.filter { $0.uuid == counterCharacteristicUUID }
+
+            guard !counterCharacteristics.isEmpty else {
+                peripheral.discoverCharacteristics([counterCharacteristicUUID], for: service)
+                return
+            }
+
+            for characteristic in counterCharacteristics {
+                activateCounterCharacteristic(characteristic, on: peripheral)
+            }
+        } else {
+            peripheral.discoverCharacteristics([counterCharacteristicUUID], for: service)
+        }
+    }
+
+    private func activateCounterCharacteristic(_ characteristic: CBCharacteristic, on peripheral: CBPeripheral) {
+        connectionStateText = "Subscribed"
+        statusMessage = "Counter characteristic found. Waiting for values..."
+
+        if characteristic.properties.contains(.read) {
+            peripheral.readValue(for: characteristic)
+        }
+
+        if characteristic.properties.contains(.notify), !characteristic.isNotifying {
+            peripheral.setNotifyValue(true, for: characteristic)
+        }
+    }
+
     private func integerValue(from data: Data) -> Int? {
         if data.count >= MemoryLayout<Int32>.size {
             let bytes = Array(data.prefix(MemoryLayout<Int32>.size))
@@ -173,8 +225,8 @@ final class BLECounterManager: NSObject, ObservableObject {
 
     private func scheduleWarningNotification(for value: Int) {
         let content = UNMutableNotificationContent()
-        content.title = "ESP32 value warning"
-        content.body = "The ESP32 reported \(value), which is above \(warningThreshold)."
+        content.title = "TDS Alert: Filter Change Needed"
+        content.body = "\(value) ppm detected"
         content.sound = .default
 
         let request = UNNotificationRequest(
@@ -188,11 +240,39 @@ final class BLECounterManager: NSObject, ObservableObject {
 }
 
 extension BLECounterManager: CBCentralManagerDelegate {
+    func centralManager(_ central: CBCentralManager, willRestoreState dict: [String: Any]) {
+        let restoredPeripherals = dict[CBCentralManagerRestoredStatePeripheralsKey] as? [CBPeripheral] ?? []
+
+        guard let peripheral = restoredPeripherals.first else {
+            connectionStateText = "Bluetooth restored"
+            statusMessage = "Bluetooth state was restored, but no ESP32 peripheral was available."
+            return
+        }
+
+        stopScanning()
+        connectedPeripheral = peripheral
+        peripheral.delegate = self
+        isConnected = peripheral.state == .connected
+        connectionStateText = "Bluetooth restored"
+        statusMessage = "Restored ESP32 Bluetooth state. Waiting for updates..."
+
+        switch peripheral.state {
+        case .connected:
+            discoverCounterService(on: peripheral)
+        case .connecting:
+            statusMessage = "Restored pending ESP32 connection."
+        default:
+            central.connect(peripheral, options: nil)
+        }
+    }
+
     func centralManagerDidUpdateState(_ central: CBCentralManager) {
         switch central.state {
         case .poweredOn:
-            connectionStateText = "Bluetooth ready"
-            statusMessage = "Bluetooth is ready. Tap Scan and Connect."
+            if connectedPeripheral == nil && !isScanning {
+                connectionStateText = "Bluetooth ready"
+                statusMessage = "Bluetooth is ready. Tap Scan and Connect."
+            }
 
             if pendingScanRequest {
                 startScanning()
@@ -251,7 +331,7 @@ extension BLECounterManager: CBCentralManagerDelegate {
         isConnected = true
         connectionStateText = "Connected"
         statusMessage = "Connected. Discovering BLE services..."
-        peripheral.discoverServices(nil)
+        discoverCounterService(on: peripheral)
     }
 
     func centralManager(_ central: CBCentralManager, didFailToConnect peripheral: CBPeripheral, error: Error?) {
@@ -283,8 +363,8 @@ extension BLECounterManager: CBPeripheralDelegate {
             return
         }
 
-        for service in services {
-            peripheral.discoverCharacteristics(nil, for: service)
+        for service in services where service.uuid == serviceUUID {
+            discoverCounterCharacteristic(on: peripheral, service: service)
         }
     }
 
@@ -300,16 +380,7 @@ extension BLECounterManager: CBPeripheralDelegate {
         }
 
         for characteristic in characteristics where characteristic.uuid == counterCharacteristicUUID {
-            connectionStateText = "Subscribed"
-            statusMessage = "Counter characteristic found. Waiting for values..."
-
-            if characteristic.properties.contains(.read) {
-                peripheral.readValue(for: characteristic)
-            }
-
-            if characteristic.properties.contains(.notify) {
-                peripheral.setNotifyValue(true, for: characteristic)
-            }
+            activateCounterCharacteristic(characteristic, on: peripheral)
         }
     }
 
