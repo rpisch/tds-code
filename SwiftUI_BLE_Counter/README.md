@@ -14,7 +14,7 @@ The current implementation is intentionally close to the working reference proje
 
 - `BLECounterApp.swift`: SwiftUI app entry point.
 - `ContentView.swift`: UI showing connection state, the latest value, and nearby BLE devices while scanning.
-- `BLECounterManager.swift`: CoreBluetooth scanner, connector, service discovery, notification subscription, and integer parsing.
+- `BLECounterManager.swift`: CoreBluetooth scanner, connector, service discovery, notification subscription, integer parsing, and local warning notifications for values above `20`.
 - `Info.plist`: Bluetooth privacy strings.
 
 ## Xcode Setup
@@ -25,14 +25,16 @@ The current implementation is intentionally close to the working reference proje
 4. Add `ContentView.swift` and `BLECounterManager.swift` to the app target.
 5. In **Signing & Capabilities**, enable the Bluetooth capability your project requires.
 6. Add `Privacy - Bluetooth Always Usage Description` / `NSBluetoothAlwaysUsageDescription` to the app target's actual Info settings. In newer Xcode projects, the generated target Info settings may be used instead of this standalone `Info.plist`.
-7. Delete the old app from the iPhone after changing Bluetooth settings, then run again on a real iPhone. The iOS Simulator cannot test Bluetooth LE connections to an ESP32.
+7. Allow local notifications when the app asks. Values above `20` trigger a local warning notification.
+8. Delete the old app from the iPhone after changing Bluetooth settings, then run again on a real iPhone. The iOS Simulator cannot test Bluetooth LE connections to an ESP32.
 
 ## BLE Contract
 
 - Device name: `ESP32-TDS-BLE`
 - Service UUID: `4FAFC201-1FB5-459E-8FCC-C5C9C331914B`
 - Characteristic UUID: `BEB5483E-36E1-4688-B7F5-EA07361B26A8`
-- Value format: 4-byte little-endian signed integer, `1...100`
+- Value format: 4-byte little-endian signed integer entered through the ESP32 Serial Monitor.
+- Warning threshold: the iOS app sends a local notification when the received value crosses above `20`.
 
 ## Checklist
 

@@ -1,6 +1,7 @@
 import Combine
 import CoreBluetooth
 import Foundation
+import UserNotifications
 
 final class BLECounterManager: NSObject, ObservableObject {
     @Published var latestValue: Int?
@@ -13,12 +14,15 @@ final class BLECounterManager: NSObject, ObservableObject {
     private let deviceName = "ESP32-TDS-BLE"
     private let serviceUUID = CBUUID(string: "4FAFC201-1FB5-459E-8FCC-C5C9C331914B")
     private let counterCharacteristicUUID = CBUUID(string: "BEB5483E-36E1-4688-B7F5-EA07361B26A8")
+    private let warningThreshold = 20
+    private let notificationCenter = UNUserNotificationCenter.current()
 
     private var centralManager: CBCentralManager!
     private var connectedPeripheral: CBPeripheral?
     private var scanTimeoutTimer: Timer?
     private var pendingScanRequest = false
     private var discoveredDeviceIDs = Set<UUID>()
+    private var wasAboveWarningThreshold = false
 
     var latestValueText: String {
         guard let latestValue else {
@@ -30,6 +34,7 @@ final class BLECounterManager: NSObject, ObservableObject {
 
     override init() {
         super.init()
+        configureWarningNotifications()
         centralManager = CBCentralManager(delegate: self, queue: .main)
     }
 
@@ -127,6 +132,58 @@ final class BLECounterManager: NSObject, ObservableObject {
         }
 
         return nil
+    }
+
+    private func configureWarningNotifications() {
+        notificationCenter.delegate = self
+        notificationCenter.requestAuthorization(options: [.alert, .sound]) { _, _ in }
+    }
+
+    private func handleWarningNotification(for value: Int) {
+        let isAboveWarningThreshold = value > warningThreshold
+        defer {
+            wasAboveWarningThreshold = isAboveWarningThreshold
+        }
+
+        guard isAboveWarningThreshold && !wasAboveWarningThreshold else {
+            return
+        }
+
+        notificationCenter.getNotificationSettings { [weak self] settings in
+            guard let self else {
+                return
+            }
+
+            switch settings.authorizationStatus {
+            case .authorized, .provisional:
+                self.scheduleWarningNotification(for: value)
+            case .notDetermined:
+                self.notificationCenter.requestAuthorization(options: [.alert, .sound]) { granted, _ in
+                    if granted {
+                        self.scheduleWarningNotification(for: value)
+                    }
+                }
+            case .denied:
+                break
+            @unknown default:
+                break
+            }
+        }
+    }
+
+    private func scheduleWarningNotification(for value: Int) {
+        let content = UNMutableNotificationContent()
+        content.title = "ESP32 value warning"
+        content.body = "The ESP32 reported \(value), which is above \(warningThreshold)."
+        content.sound = .default
+
+        let request = UNNotificationRequest(
+            identifier: "esp32-value-warning-\(UUID().uuidString)",
+            content: content,
+            trigger: nil
+        )
+
+        notificationCenter.add(request)
     }
 }
 
@@ -274,6 +331,7 @@ extension BLECounterManager: CBPeripheralDelegate {
         latestValue = value
         connectionStateText = "Receiving"
         statusMessage = "Received \(value) from ESP32."
+        handleWarningNotification(for: value)
     }
 
     func peripheral(_ peripheral: CBPeripheral, didUpdateNotificationStateFor characteristic: CBCharacteristic, error: Error?) {
@@ -285,6 +343,16 @@ extension BLECounterManager: CBPeripheralDelegate {
         if characteristic.uuid == counterCharacteristicUUID, characteristic.isNotifying {
             statusMessage = "Notification subscription is active. Waiting for values..."
         }
+    }
+}
+
+extension BLECounterManager: UNUserNotificationCenterDelegate {
+    func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        willPresent notification: UNNotification,
+        withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
+    ) {
+        completionHandler([.banner, .sound])
     }
 }
 
